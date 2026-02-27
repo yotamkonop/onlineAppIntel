@@ -230,11 +230,6 @@ if uploaded_file:
         shap_exp_class[0],
         show=False
     )
-    print(shap_exp.values.shape)
-    import hashlib, pathlib
 
-    p = pathlib.Path("temp/xgboost_pipeline.joblib")
-    print("exists:", p.exists(), "path:", p.resolve())
-    print("sha256:", hashlib.sha256(p.read_bytes()).hexdigest())
     st.pyplot(fig)
     plt.close(fig)

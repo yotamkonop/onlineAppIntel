@@ -16,24 +16,20 @@ LABEL_MAPPING = {
     1: "real_error",
 }
 
+CLASS_INDEX = 1  # class to explain
+
+
+# ==============================
+# HELPER FUNCTIONS
+# ==============================
+
 def extract_memory_from_class(class_str):
-    """
-    Extracts memory in GB from a Class string.
-    Examples:
-      'gpu_16gb' -> 16
-      'cpu_8GB'  -> 8
-    """
     if pd.isna(class_str):
         return 0
-
     match = re.search(r'(\d+)\s*gb', str(class_str).lower())
     return int(match.group(1)) if match else 0
 
-CLASS_INDEX = 1  # probability column to display
 
-# ==============================
-# MODEL FEATURES
-# ==============================
 MODEL_FEATURES = [
     'AvgRM', 'AvgVM', 'memory', 'Class_gb',
     'cpu_pressure', 'memory_pressure', 'resource_ratio',
@@ -64,22 +60,26 @@ ERROR_KEYWORDS = {
     "has crash": "crash",
 }
 
+
 # ==============================
-# LOAD MODEL (cached)
+# LOAD MODEL
 # ==============================
 @st.cache_resource
 def load_model():
-    return joblib.load("xgboost_pipeline.joblib")
+    return joblib.load("temp/xgboost_pipeline.joblib")
+
 
 pipeline = load_model()
+
 
 # ==============================
 # FEATURE ENGINEERING
 # ==============================
-def derive_error_features(df: pd.DataFrame) -> pd.DataFrame:
 
+def derive_error_features(df):
     if "Class_gb" not in df.columns and "Class" in df.columns:
         df["Class_gb"] = df["Class"].apply(extract_memory_from_class)
+
     if "normalized_error" not in df.columns:
         return df
 
@@ -95,13 +95,13 @@ def derive_error_features(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def derive_resource_features(df: pd.DataFrame) -> pd.DataFrame:
+def derive_resource_features(df):
     if "cpu_pressure" not in df.columns:
         if {"CoresConsumption", "cores"}.issubset(df.columns):
             df["cpu_pressure"] = np.where(
-                (df["CoresConsumption"] == 0) & (df["cores"] == 0),
+                df["cores"].fillna(0) == 0,
                 0,
-                df["CoresConsumption"] / df["cores"]
+                df["CoresConsumption"].fillna(0) / df["cores"]
             )
 
     if "memory_pressure" not in df.columns and "AvgVM" in df.columns:
@@ -110,75 +110,51 @@ def derive_resource_features(df: pd.DataFrame) -> pd.DataFrame:
     if "resource_ratio" not in df.columns:
         if {"AvgRM", "AvgVM"}.issubset(df.columns):
             df["resource_ratio"] = np.where(
-                (df["AvgRM"] == 0) & (df["AvgVM"] == 0),
+                df["AvgVM"].fillna(0) == 0,
                 0,
-                df["AvgRM"] / df["AvgVM"]
+                df["AvgRM"].fillna(0) / df["AvgVM"]
             )
 
     return df
 
 
-def add_default_zero_features(df: pd.DataFrame) -> pd.DataFrame:
+def add_default_zero_features(df):
     for col in DEFAULT_ZERO_FEATURES:
         if col not in df.columns:
             df[col] = 0
     return df
 
+
 # ==============================
 # UI
 # ==============================
-st.title("🔍 Error Prediction & Explanation")
 
-st.write(
-    "Upload a CSV file with error data. "
-    "Missing features will be derived automatically when possible."
-)
+st.title("🔍 Error Prediction & Explanation")
 
 uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
 
 if uploaded_file:
-    # ==============================
-    # LOAD DATA
-    # ==============================
+
     df = pd.read_csv(uploaded_file)
 
     st.subheader("📄 Uploaded Data")
     st.dataframe(df)
 
-    # ==============================
-    # FEATURE ENGINEERING
-    # ==============================
-    st.subheader("🧠 Feature Engineering")
-
+    # Feature engineering
     with st.spinner("Deriving missing features..."):
         df = derive_error_features(df)
         df = derive_resource_features(df)
         df = add_default_zero_features(df)
 
-    # ==============================
-    # VALIDATION
-    # ==============================
+    # Validation
     st.subheader("✅ Validation")
 
     missing = set(MODEL_FEATURES) - set(df.columns)
     if missing:
-        st.error(
-            "Missing required features that could not be derived:\n\n"
-            f"{sorted(missing)}"
-        )
+        st.error(f"Missing required features: {sorted(missing)}")
         st.stop()
 
-    X = df[MODEL_FEATURES]
-
-    try:
-        X = X.astype(float)
-    except Exception as e:
-        st.error(f"Failed to cast features to float: {e}")
-        st.stop()
-
-    if X.isnull().any().any():
-        st.error("Final feature set contains NaN values.")
-        st.stop()
+    X = df[MODEL_FEATURES].astype(float).fillna(0)
 
     st.success("Validation passed!")
 
@@ -202,29 +178,58 @@ if uploaded_file:
     st.subheader("🧠 Model Explanation (SHAP)")
 
     with st.spinner("Computing SHAP explanations..."):
-        explainer = shap.Explainer(pipeline.predict_proba, X)
-        shap_values = explainer(X)
 
-    # ---- Global explanation ----
+        # Separate preprocessing and model
+        preprocess = pipeline.named_steps[list(pipeline.named_steps.keys())[0]]
+        model = pipeline.named_steps[list(pipeline.named_steps.keys())[-1]]
+
+        # Transform input exactly like training
+        X_transformed = preprocess.transform(X)
+
+        # Get feature names after preprocessing
+        try:
+            feature_names = preprocess.get_feature_names_out()
+        except:
+            feature_names = [f"feature_{i}" for i in range(X_transformed.shape[1])]
+
+        # Convert to DataFrame so SHAP keeps column names
+        X_transformed_df = pd.DataFrame(
+            X_transformed,
+            columns=feature_names,
+            index=X.index
+        )
+
+        # Create TreeExplainer
+        explainer = shap.TreeExplainer(model)
+
+        # Use modern SHAP API (returns Explanation object)
+        shap_exp = explainer(X_transformed_df)
+
+        # Select class to explain (binary classification)
+        shap_exp_class = shap_exp[..., CLASS_INDEX]
+
+    # ---- Global SHAP Summary Plot ----
     st.markdown("### Global Feature Importance")
 
     plt.clf()
     shap.summary_plot(
-        shap_values[..., CLASS_INDEX],
-        X,
+        shap_exp_class,
+        X_transformed_df,
         show=False
     )
+
     fig = plt.gcf()
     st.pyplot(fig)
     plt.close(fig)
 
-    # ---- Local explanation ----
+    # ---- Local Waterfall Plot ----
     st.markdown("### Explanation for First Row")
 
     fig, ax = plt.subplots()
     shap.plots.waterfall(
-        shap_values[0, :, CLASS_INDEX],
+        shap_exp_class[0],
         show=False
     )
+
     st.pyplot(fig)
     plt.close(fig)

@@ -66,7 +66,7 @@ ERROR_KEYWORDS = {
 # ==============================
 @st.cache_resource
 def load_model():
-    return joblib.load("temp/xgboost_pipeline.joblib")
+    return joblib.load("xgboost_pipeline.joblib")
 
 
 pipeline = load_model()
@@ -230,6 +230,11 @@ if uploaded_file:
         shap_exp_class[0],
         show=False
     )
+    print(shap_exp.values.shape)
+    import hashlib, pathlib
 
+    p = pathlib.Path("temp/xgboost_pipeline.joblib")
+    print("exists:", p.exists(), "path:", p.resolve())
+    print("sha256:", hashlib.sha256(p.read_bytes()).hexdigest())
     st.pyplot(fig)
     plt.close(fig)

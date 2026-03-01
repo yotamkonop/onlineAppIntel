@@ -12,8 +12,8 @@ import re
 st.set_page_config(page_title="Error Predictor", layout="wide")
 
 LABEL_MAPPING = {
-    0: "sporadic_error",
-    1: "real_error",
+    0: "sporadic error",
+    1: "real error",
 }
 
 CLASS_INDEX = 1  # class to explain
@@ -137,7 +137,7 @@ if uploaded_file:
 
     df = pd.read_csv(uploaded_file)
 
-    st.subheader("📄 Uploaded Data")
+    st.subheader("Uploaded Data")
     st.dataframe(df)
 
     # Feature engineering
@@ -147,7 +147,7 @@ if uploaded_file:
         df = add_default_zero_features(df)
 
     # Validation
-    st.subheader("✅ Validation")
+    st.subheader("Validation")
 
     missing = set(MODEL_FEATURES) - set(df.columns)
     if missing:
@@ -161,75 +161,69 @@ if uploaded_file:
     # ==============================
     # PREDICTION
     # ==============================
-    st.subheader("📊 Prediction")
 
     y_pred = pipeline.predict(X)
     y_proba = pipeline.predict_proba(X)
+
 
     df_out = df.copy()
     df_out["prediction"] = [LABEL_MAPPING[int(p)] for p in y_pred]
     df_out["probability"] = y_proba[:, CLASS_INDEX]
 
+    st.subheader(f"Prediction: {df_out["prediction"][0]}")
     st.dataframe(df_out)
 
     # ==============================
     # SHAP EXPLANATION
     # ==============================
-    st.subheader("🧠 Model Explanation (SHAP)")
+    st.subheader("Model Explanation")
 
     with st.spinner("Computing SHAP explanations..."):
 
-        # Separate preprocessing and model
         preprocess = pipeline.named_steps[list(pipeline.named_steps.keys())[0]]
         model = pipeline.named_steps[list(pipeline.named_steps.keys())[-1]]
 
-        # Transform input exactly like training
         X_transformed = preprocess.transform(X)
 
-        # Get feature names after preprocessing
         try:
             feature_names = preprocess.get_feature_names_out()
         except:
             feature_names = [f"feature_{i}" for i in range(X_transformed.shape[1])]
 
-        # Convert to DataFrame so SHAP keeps column names
         X_transformed_df = pd.DataFrame(
             X_transformed,
             columns=feature_names,
             index=X.index
         )
 
-        # Create TreeExplainer
         explainer = shap.TreeExplainer(model)
-
-        # Use modern SHAP API (returns Explanation object)
         shap_exp = explainer(X_transformed_df)
-
-        # Select class to explain (binary classification)
         shap_exp_class = shap_exp[..., CLASS_INDEX]
 
+    # ---- Two columns layout ----
+    col1, col2 = st.columns(2)
+
     # ---- Global SHAP Summary Plot ----
-    st.markdown("### Global Feature Importance")
+    with col1:
+        st.markdown("### Global Feature Importance")
 
-    plt.clf()
-    shap.summary_plot(
-        shap_exp_class,
-        X_transformed_df,
-        show=False
-    )
-
-    fig = plt.gcf()
-    st.pyplot(fig)
-    plt.close(fig)
+        fig1 = plt.figure(figsize=(6, 4))  # smaller figure
+        shap.summary_plot(
+            shap_exp_class,
+            X_transformed_df,
+            show=False
+        )
+        st.pyplot(fig1)
+        plt.close(fig1)
 
     # ---- Local Waterfall Plot ----
-    st.markdown("### Explanation for First Row")
+    with col2:
+        st.markdown("### Explanation for First Row")
 
-    fig, ax = plt.subplots()
-    shap.plots.waterfall(
-        shap_exp_class[0],
-        show=False
-    )
-
-    st.pyplot(fig)
-    plt.close(fig)
+        fig2 = plt.figure(figsize=(6, 4))  # smaller figure
+        shap.plots.waterfall(
+            shap_exp_class[0],
+            show=False
+        )
+        st.pyplot(fig2)
+        plt.close(fig2)

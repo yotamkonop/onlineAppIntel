@@ -129,7 +129,7 @@ def add_default_zero_features(df):
 # UI
 # ==============================
 
-st.title("🔍 Error Prediction & Explanation")
+st.title("Error Prediction & Explanation")
 
 uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
 
